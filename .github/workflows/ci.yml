@@ -10,9 +10,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -41,9 +41,15 @@ jobs:
 
       - name: Validate systemd units
         run: |
-          # systemd-analyze is available on the runner and parses unit syntax
-          # without needing the service to be installed.
-          systemd-analyze verify --man=no ./deploy/ipapi.service || true
+          # systemd-analyze parses unit syntax without installing anything. The
+          # units reference binaries under /opt/ipapi, which only exist on a
+          # deployed host, so that one error is filtered out; anything else
+          # (an unknown directive, a malformed value) fails the build.
+          status=0
           for f in deploy/*.service deploy/*.timer; do
-            echo "== $f"; systemd-analyze verify --man=no "$f" 2>&1 | head -20 || true
+            echo "== $f"
+            out="$(systemd-analyze verify --man=no "$f" 2>&1 || true)"
+            out="$(echo "$out" | grep -v 'is not executable: No such file or directory' || true)"
+            if [ -n "$out" ]; then echo "$out"; status=1; fi
           done
+          exit $status
