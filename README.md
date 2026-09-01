@@ -125,7 +125,17 @@ sudo /tmp/ipapi/deploy/install.sh
 ```
 
 `install.sh` 会建 `ipapi` 系统用户、装到 `/opt/ipapi`、首次下载并构建数据库、注册
-systemd 服务和每周更新定时器，最后跑一次健康检查。服务器需要 `curl`、`unzip`、`gzip`。
+systemd 服务和每周更新定时器，最后轮询健康检查最多 30 秒。
+服务器需要 `curl`、`unzip`、`gzip`、`ss`。
+
+默认端口是 8080。**如果这个端口已被 nginx 等占用**，安装脚本会直接报错退出并列出占用者
+（而不是装完才发现不通）。换端口重装：
+
+```bash
+sudo PORT=8090 /tmp/ipapi/deploy/install.sh
+```
+
+改完记得把 [deploy/nginx.conf](deploy/nginx.conf) 里的 `proxy_pass` 也指到同一端口。
 
 装完之后：
 

@@ -80,9 +80,10 @@ type Resolver struct {
 	flightMu sync.Mutex
 	flight   map[string]chan struct{}
 
-	log  *slog.Logger
-	stop chan struct{}
-	wg   sync.WaitGroup
+	log    *slog.Logger
+	stop   chan struct{}
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 type Options struct {
@@ -121,6 +122,9 @@ func New(opt Options) (*Resolver, error) {
 		log:         opt.Logger,
 		stop:        make(chan struct{}),
 	}
+	// Cancelled by Close so background work never outlives the resolver.
+	bgCtx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
 	if err := r.load(); err != nil {
 		return nil, err
 	}
@@ -128,15 +132,23 @@ func New(opt Options) (*Resolver, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if bs := r.loadBootstrap(ctx); bs != nil && (len(bs.v4) > 0 || len(bs.v6) > 0) {
-		r.boot.Store(bs)
-		r.log.Info("rdap bootstrap loaded", "v4_prefixes", len(bs.v4), "v6_prefixes", len(bs.v6))
-	} else {
-		r.log.Warn("rdap bootstrap unavailable, falling back to redirector", "redirector", rdapRedirector)
-	}
-	r.loadASNBootstrap(ctx)
+	// The bootstrap is fetched in the background: it costs a network round trip
+	// on a host with no cached copy, and blocking here would delay the HTTP
+	// listener coming up. Until it lands, lookups go through the public
+	// redirector, which resolves to the same registries.
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		ctx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+		defer cancel()
+		if bs := r.loadBootstrap(ctx); bs != nil && (len(bs.v4) > 0 || len(bs.v6) > 0) {
+			r.boot.Store(bs)
+			r.log.Info("rdap bootstrap loaded", "v4_prefixes", len(bs.v4), "v6_prefixes", len(bs.v6))
+		} else {
+			r.log.Warn("rdap bootstrap unavailable, using redirector", "redirector", rdapRedirector)
+		}
+		r.loadASNBootstrap(ctx)
+	}()
 
 	r.wg.Add(1)
 	go r.flushLoop()
@@ -342,6 +354,7 @@ func (r *Resolver) flushLoop() {
 
 // Close stops background work and persists the cache.
 func (r *Resolver) Close() error {
+	r.cancel()
 	close(r.stop)
 	r.wg.Wait()
 	err := r.Flush()
