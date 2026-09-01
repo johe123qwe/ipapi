@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh the ipapi source databases and rebuild the MMDB files
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ipapi
+Group=ipapi
+WorkingDirectory=/opt/ipapi
+ExecStart=/opt/ipapi/deploy/update.sh
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ipapi/data

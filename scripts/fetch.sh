@@ -24,4 +24,4 @@ unzip -o -q -j "$SRC/geolocationDatabaseIPv4.csv.zip" -d "$SRC"
 unzip -o -q -j "$SRC/geolocationDatabaseIPv6.csv.zip" -d "$SRC"
 gzip -dkf "$SRC/ip2asn-combined.tsv.gz"
 
-ls -lh "$SRC" | grep -E '\.csv|\.tsv' || true
+ls -lh "$SRC"/*.csv "$SRC"/*.tsv 2>/dev/null || true

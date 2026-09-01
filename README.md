@@ -81,8 +81,70 @@ curl 'http://localhost:8080/healthz'                 # 健康检查
 make data    # 重新下载 + 重建 mmdb
 ```
 
-`geo.mmdb` 和 `asn.mmdb` 是原子替换（写 `.tmp` 再 rename），但当前进程持有的是旧文件的
-mmap，重启后才生效。生产环境建议 `make data && systemctl restart ipapi`。
+`geo.mmdb` 和 `asn.mmdb` 是原子替换（写 `.tmp` 再 rename）。当前进程持有的是旧文件的 mmap，
+需要发 `SIGHUP` 让它换用新文件 —— 这是热重载，不中断请求、不需要重启：
+
+```bash
+make data && kill -HUP $(pgrep -f ipapi-server)
+```
+
+服务器上装了 systemd 的话，`ipapi-update.timer` 每周自动做这件事。
+
+## 发版
+
+推一个 `v*` tag，GitHub Actions 会自动构建两种架构的静态包、生成校验和并发布 Release：
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+产物：`ipapi-linux-amd64.tar.gz`、`ipapi-linux-arm64.tar.gz`、`SHA256SUMS`。
+
+发版前工作流会先跑 gofmt / vet / build，再对打包出来的 amd64 二进制做冒烟测试
+（确认静态链接且能正常启动报错），任一步失败就不会发布。
+也可以在 Actions 页面手动触发 `release`，对已存在的 tag 重新打包（会覆盖同名资产）。
+
+`ci` 工作流在 push 到 main 和 PR 时运行同一套检查，外加 shellcheck 和 systemd unit 语法校验。
+
+## 服务器部署
+
+在开发机上打包（静态链接，服务器不需要装 Go）：
+
+```bash
+make release            # 产出 dist/ipapi-linux-amd64.tar.gz，约 4MB
+make release ARCH=arm64 # ARM 服务器
+```
+
+传到服务器并安装：
+
+```bash
+scp dist/ipapi-linux-amd64.tar.gz user@server:/tmp/
+ssh user@server
+mkdir -p /tmp/ipapi && tar -xzf /tmp/ipapi-linux-amd64.tar.gz -C /tmp/ipapi
+sudo /tmp/ipapi/deploy/install.sh
+```
+
+`install.sh` 会建 `ipapi` 系统用户、装到 `/opt/ipapi`、首次下载并构建数据库、注册
+systemd 服务和每周更新定时器，最后跑一次健康检查。服务器需要 `curl`、`unzip`、`gzip`。
+
+装完之后：
+
+| 命令 | 作用 |
+| --- | --- |
+| `systemctl status ipapi` | 运行状态 |
+| `journalctl -u ipapi -f` | 实时日志 |
+| `systemctl reload ipapi` | 热重载数据库（不中断请求） |
+| `systemctl start ipapi-update` | 立即更新数据 |
+| `systemctl list-timers ipapi-*` | 下次自动更新时间 |
+
+服务默认只监听 `127.0.0.1:8080`，对外用 nginx 反代，示例配置见
+[deploy/nginx.conf](deploy/nginx.conf)（含限流和 `X-Forwarded-For` 透传）。
+
+### 数据更新是热重载
+
+`ipapi-update.timer` 每周一凌晨触发，下载新数据、重建 mmdb，然后给主进程发 `SIGHUP`。
+服务打开新文件后原子替换，旧的 mmap 保留 60 秒等在途请求走完再释放。
+**全程不重启、不掉请求**，也因此更新任务不需要任何提权。
 
 ## 规模
 

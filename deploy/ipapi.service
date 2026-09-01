@@ -1,0 +1,39 @@
+[Unit]
+Description=Self-hosted IP lookup API
+Documentation=https://github.com/ipapi-is/ipapi
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ipapi
+Group=ipapi
+WorkingDirectory=/opt/ipapi
+ExecStart=/opt/ipapi/bin/ipapi-server -addr 127.0.0.1:8080
+
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=always
+RestartSec=3
+
+# The server flushes its RDAP cache on SIGTERM; give it room to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening. Outbound HTTPS must stay open for RDAP lookups.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/opt/ipapi/data
+
+[Install]
+WantedBy=multi-user.target

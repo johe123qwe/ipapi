@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - run: go vet ./...
+      - run: go build ./...
+
+      - name: Check that the release packages build
+        run: |
+          make release ARCH=amd64
+          make release ARCH=arm64
+          ls -lh dist/*.tar.gz
+
+      - name: Check shell scripts
+        run: |
+          for f in scripts/*.sh deploy/*.sh; do bash -n "$f"; done
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh deploy/*.sh
+
+      - name: Validate systemd units
+        run: |
+          # systemd-analyze is available on the runner and parses unit syntax
+          # without needing the service to be installed.
+          systemd-analyze verify --man=no ./deploy/ipapi.service || true
+          for f in deploy/*.service deploy/*.timer; do
+            echo "== $f"; systemd-analyze verify --man=no "$f" 2>&1 | head -20 || true
+          done

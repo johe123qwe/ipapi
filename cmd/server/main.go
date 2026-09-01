@@ -17,8 +17,8 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -86,8 +86,9 @@ type Response struct {
 }
 
 type server struct {
-	geo     *maxminddb.Reader
-	asn     *maxminddb.Reader
+	geo     atomic.Pointer[maxminddb.Reader]
+	asn     atomic.Pointer[maxminddb.Reader]
+	mmdbDir string
 	company *company.Resolver
 	compat  bool
 	timeout time.Duration
@@ -107,21 +108,19 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	geo, err := maxminddb.Open(filepath.Join(*mmdbDir, "geo.mmdb"))
-	if err != nil {
-		log.Error("cannot open geo.mmdb (run `make data` first)", "err", err)
+	s := &server{mmdbDir: *mmdbDir, compat: *compat, timeout: *timeout, log: log}
+	if err := s.reload(); err != nil {
+		log.Error("cannot open databases (run `make data` first)", "err", err)
 		os.Exit(1)
 	}
-	defer geo.Close()
-
-	asn, err := maxminddb.Open(filepath.Join(*mmdbDir, "asn.mmdb"))
-	if err != nil {
-		log.Error("cannot open asn.mmdb (run `make data` first)", "err", err)
-		os.Exit(1)
-	}
-	defer asn.Close()
-
-	s := &server{geo: geo, asn: asn, compat: *compat, timeout: *timeout, log: log}
+	defer func() {
+		if r := s.geo.Load(); r != nil {
+			_ = r.Close()
+		}
+		if r := s.asn.Load(); r != nil {
+			_ = r.Close()
+		}
+	}()
 
 	if *useRDAP {
 		res, err := company.New(company.Options{CacheDir: *cacheDir, Logger: log})
@@ -132,6 +131,8 @@ func main() {
 		defer res.Close()
 		s.company = res
 	}
+
+	go s.watchReloads()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -160,8 +161,13 @@ func main() {
 	}()
 
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	for {
+		if s := <-sig; s == syscall.SIGHUP {
+			continue
+		}
+		break
+	}
 	log.Info("shutting down")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -241,7 +247,7 @@ func (s *server) lookup(ctx context.Context, addr netip.Addr) Response {
 	}
 
 	var geo geoRecord
-	if res := s.geo.Lookup(addr); res.Found() {
+	if res := s.geo.Load().Lookup(addr); res.Found() {
 		if err := res.Decode(&geo); err == nil {
 			resp.CC = geo.CountryCode
 			resp.Country = geo.Country
@@ -256,7 +262,7 @@ func (s *server) lookup(ctx context.Context, addr netip.Addr) Response {
 	}
 
 	var asn asnRecord
-	if res := s.asn.Lookup(addr); res.Found() {
+	if res := s.asn.Load().Lookup(addr); res.Found() {
 		if err := res.Decode(&asn); err == nil {
 			resp.ASNNum = asn.ASN
 			// RouteViews carries the AS handle (ATT-INTERNET4), not the name of
