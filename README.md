@@ -28,6 +28,25 @@ make data    # 下载数据源并构建 data/mmdb/{geo,asn}.mmdb（约 1 分钟�
 make run     # 启动 API，默认 :8080
 ```
 
+## 网页前端
+
+浏览器打开 `http://localhost:8080/` 就是查询页面：搜索框、批量查询、JSON 高亮（点字段名看含义）、
+位置 / 网络 / 组织三张卡片、字段说明和接口示例。整页是一个 `go:embed` 进二进制的 HTML 文件，
+不加载任何外部资源，离线机器上也能用。
+
+同一个路径按 `Accept` 协商，**不影响现有 API 调用**：
+
+| 请求 | 返回 |
+| --- | --- |
+| `Accept` 里排在前面的是 `text/html`（浏览器） | 页面 |
+| `*/*`（curl、fetch、各种 SDK） | JSON |
+| 任意客户端加 `?format=json` | JSON |
+| 任意客户端加 `?format=html` | 页面 |
+| `-ui=false` 启动 | 只有 JSON |
+
+页面里的 `?q=` 可直接分享：`http://localhost:8080/?q=1.1.1.1` 浏览器打开是渲染好的结果，
+curl 同一个地址仍然是 JSON。
+
 ## 接口
 
 ```bash
@@ -48,6 +67,7 @@ curl 'http://localhost:8080/healthz'                 # 健康检查
 | `-cache` | `data/cache` | RDAP 缓存目录 |
 | `-company` | `true` | 关掉则 `company_name` 用 `asn_name` 兜底、`asn_org` 保持 RouteViews 值，全程无外部请求 |
 | `-compat` | `false` | 补齐 `is_datacenter`/`is_tor`/`is_proxy`/`is_vpn`/`is_abuser` 为 `false` |
+| `-ui` | `true` | 浏览器请求 `/` 时返回网页前端；关掉则任何客户端都只拿到 JSON |
 | `-timeout` | `5s` | 单次 company 查询预算 |
 
 ## 与 api.ipapi.is 的差异

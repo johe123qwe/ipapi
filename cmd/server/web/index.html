@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ipapi · 自建 IP 查询接口</title>
+<meta name="description" content="自建的 IP 地理位置 / ASN / whois 查询接口，数据来自公开来源，无调用配额。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233fb950'/%3E%3Cpath d='M16 6a10 10 0 100 20 10 10 0 000-20zm0 2.2c1.4 0 2.9 2.3 3.4 5.8h-6.8c.5-3.5 2-5.8 3.4-5.8zM9.6 14a12 12 0 011.3-4.5A7.9 7.9 0 008.3 14zm0 4h-1.3a7.9 7.9 0 002.6 4.5A12 12 0 019.6 18zm3 0h6.8c-.5 3.5-2 5.8-3.4 5.8S13.1 21.5 12.6 18zm9.8 0h1.3a7.9 7.9 0 01-2.6 4.5 12 12 0 001.3-4.5zm0-4a12 12 0 00-1.3-4.5 7.9 7.9 0 012.6 4.5z' fill='%230b0e11'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #0b0e11;
+  --panel: #12161b;
+  --panel-2: #171c23;
+  --line: #232a33;
+  --line-soft: #1b212a;
+  --fg: #e6edf3;
+  --fg-dim: #9aa7b4;
+  --fg-faint: #6b7783;
+  --accent: #3fb950;
+  --accent-dim: #2ea043;
+  --blue: #79c0ff;
+  --amber: #d29922;
+  --red: #f85149;
+  --purple: #d2a8ff;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbfcfd; --panel: #ffffff; --panel-2: #f4f6f8; --line: #dde3ea; --line-soft: #e8ecf1;
+    --fg: #10161d; --fg-dim: #55626f; --fg-faint: #7d8894;
+    --accent: #1a7f37; --accent-dim: #14682c; --blue: #0550ae; --amber: #9a6700;
+    --red: #cf222e; --purple: #8250df;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--fg); text-decoration-color: var(--line); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--accent); }
+code, pre, .mono { font-family: var(--mono); }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+
+/* ---------- header ---------- */
+header {
+  position: sticky; top: 0; z-index: 20;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(160%) blur(10px);
+  border-bottom: 1px solid var(--line-soft);
+}
+.bar { display: flex; align-items: center; gap: 20px; height: 58px; }
+.logo { display: flex; align-items: center; gap: 9px; font-weight: 650; letter-spacing: -.01em; text-decoration: none; }
+.logo .mark {
+  width: 22px; height: 22px; border-radius: 6px; background: var(--accent);
+  display: grid; place-items: center; color: var(--bg); font-size: 13px; font-weight: 800;
+}
+.logo .tag {
+  font: 500 11px/1 var(--mono); color: var(--fg-faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 7px; margin-left: 2px;
+}
+nav { margin-left: auto; display: flex; gap: 22px; font-size: 14px; }
+nav a { color: var(--fg-dim); text-decoration: none; }
+nav a:hover { color: var(--fg); }
+@media (max-width: 720px) { nav { gap: 14px; font-size: 13px; } .logo .tag { display: none; } }
+
+/* ---------- hero ---------- */
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; padding: 56px 0 40px; }
+@media (max-width: 940px) { .hero { grid-template-columns: 1fr; gap: 32px; padding: 36px 0 28px; } }
+@media (max-width: 560px) { h1 { font-size: 27px; } .searchrow { flex-wrap: wrap; } .field { flex-basis: 100%; } }
+h1 { font-size: 34px; line-height: 1.25; letter-spacing: -.02em; margin: 0 0 16px; font-weight: 700; }
+.lede { color: var(--fg-dim); margin: 0 0 12px; max-width: 42ch; }
+.lede strong { color: var(--fg); font-weight: 600; }
+ul.checks { list-style: none; margin: 22px 0 0; padding: 0; display: grid; gap: 10px; }
+ul.checks li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--fg-dim); }
+ul.checks svg { flex: none; margin-top: 3px; color: var(--accent); }
+ul.checks b { color: var(--fg); font-weight: 600; }
+
+/* ---------- search ---------- */
+.searchrow { display: flex; gap: 10px; }
+.field { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 12px; transition: border-color .15s; }
+.field:focus-within { border-color: var(--accent); }
+.field svg { color: var(--fg-faint); flex: none; }
+.field input {
+  flex: 1; background: none; border: 0; outline: 0; color: var(--fg);
+  font: 14px/1 var(--mono); padding: 12px 0; min-width: 0;
+}
+.field input::placeholder { color: var(--fg-faint); }
+button {
+  font: inherit; font-size: 14px; cursor: pointer; border-radius: var(--radius);
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--fg);
+  padding: 10px 16px; transition: background .15s, border-color .15s, color .15s;
+}
+button:hover { border-color: var(--fg-faint); }
+button:active { transform: translateY(1px); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #06240f; font-weight: 600; }
+button.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+@media (prefers-color-scheme: light) { button.primary { color: #fff; } }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.chip { font: 12px/1 var(--mono); padding: 7px 10px; border-radius: 7px; color: var(--fg-dim); }
+.chip:hover { color: var(--fg); }
+
+/* ---------- result ---------- */
+.result { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.result-head {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border-bottom: 1px solid var(--line-soft); background: var(--panel-2);
+  font: 12px/1 var(--mono); color: var(--fg-faint);
+}
+.result-head .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.result-head .dot.err { background: var(--red); }
+.result-head .spacer { margin-left: auto; }
+.copy { padding: 5px 10px; font-size: 12px; border-radius: 7px; }
+pre.json { margin: 0; padding: 16px; overflow: auto; font-size: 13px; line-height: 1.65; max-height: 460px; tab-size: 2; }
+pre.json .key { color: var(--blue); cursor: pointer; border-radius: 3px; }
+pre.json .key:hover, pre.json .key.on { background: color-mix(in srgb, var(--blue) 22%, transparent); }
+pre.json .str { color: var(--accent); }
+pre.json .num { color: var(--purple); }
+pre.json .bool { color: var(--amber); }
+pre.json .null { color: var(--fg-faint); }
+pre.json.loading { color: var(--fg-faint); }
+.hint { padding: 11px 14px; border-top: 1px solid var(--line-soft); font-size: 12.5px; color: var(--fg-faint); }
+.hint b { color: var(--fg-dim); font-weight: 600; }
+.explain { display: none; padding: 12px 14px; border-top: 1px solid var(--line-soft); background: var(--panel-2); font-size: 13px; }
+.explain.on { display: block; }
+.explain .name { font-family: var(--mono); color: var(--blue); font-size: 12.5px; }
+.explain p { margin: 5px 0 0; color: var(--fg-dim); }
+
+/* ---------- cards ---------- */
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; padding: 8px 0 56px; }
+@media (max-width: 940px) { .cards { grid-template-columns: 1fr; padding-bottom: 36px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+.card h3 { margin: 0 0 12px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); font-weight: 600; }
+.kv { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 6px 12px; font-size: 13.5px; }
+.kv dt { color: var(--fg-faint); }
+.kv dd { margin: 0; word-break: break-word; }
+.kv dd.mono { font-family: var(--mono); font-size: 12.5px; }
+.card .big { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: -2px 0 10px; display: flex; align-items: center; gap: 8px; }
+.card .big .flag { font-size: 22px; line-height: 1; }
+.badge {
+  display: inline-block; font: 11px/1 var(--mono); padding: 4px 7px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--fg-dim); white-space: nowrap;
+}
+.badge.good { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.badge.soft { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 45%, transparent); }
+.acc { display: flex; gap: 3px; align-items: center; }
+.acc i { width: 16px; height: 5px; border-radius: 2px; background: var(--line); display: block; }
+.acc i.on { background: var(--accent); }
+
+/* ---------- table ---------- */
+section.block { padding: 44px 0; border-top: 1px solid var(--line-soft); }
+section.block > h2 { font-size: 20px; margin: 0 0 6px; letter-spacing: -.01em; }
+section.block > .sub { color: var(--fg-dim); margin: 0 0 22px; font-size: 14px; }
+.tablewrap { border: 1px solid var(--line); border-radius: 12px; overflow: auto hidden; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { color: var(--fg-faint); font-weight: 600; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; background: var(--panel-2); }
+td.f { font-family: var(--mono); color: var(--blue); white-space: nowrap; font-size: 12.5px; }
+td.d { color: var(--fg-dim); }
+td.d code { background: var(--panel-2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 5px; font-size: 12px; color: var(--fg); }
+tr.hl td { background: color-mix(in srgb, var(--blue) 12%, transparent); }
+tbody tr:target td { background: color-mix(in srgb, var(--blue) 12%, transparent); }
+
+/* bulk table */
+#bulk-table td.ip { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+#bulk-table td.err { color: var(--red); }
+
+/* ---------- docs ---------- */
+.docs { display: grid; gap: 14px; }
+.snippet { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.snippet header { position: static; background: var(--panel-2); border: 0; border-bottom: 1px solid var(--line-soft); backdrop-filter: none; }
+.snippet .cap { padding: 9px 14px; font-size: 12.5px; color: var(--fg-dim); background: var(--panel-2); border-bottom: 1px solid var(--line-soft); }
+.snippet pre { margin: 0; padding: 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.7; }
+.snippet pre .c { color: var(--fg-faint); }
+.snippet pre .s { color: var(--accent); }
+
+/* ---------- footer ---------- */
+footer { border-top: 1px solid var(--line-soft); padding: 26px 0 40px; color: var(--fg-faint); font-size: 13px; }
+footer .row { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; }
+footer .row .spacer { margin-left: auto; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <a class="logo" href="/">
+      <span class="mark">i</span>ipapi
+      <span class="tag">self-hosted</span>
+    </a>
+    <nav>
+      <a href="#fields">字段说明</a>
+      <a href="#docs">接口</a>
+      <a href="#sources">数据来源</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="hero">
+    <div>
+      <h1>自建的 IP 查询接口，<br>没有配额，数据全公开</h1>
+      <p class="lede">复刻 <code>api.ipapi.is</code> 的响应结构，地理位置、IP→ASN、网段级 whois 全部来自公开数据源，跑在自己的机器上。</p>
+      <p class="lede">没有 API key，没有每日 <strong>1000 次</strong>上限，也没有第三方拿走你查了什么。</p>
+      <ul class="checks">
+        <li><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-6.5 6.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06L6.75 10.19l5.97-5.97a.75.75 0 0 1 1.06 0Z"/></svg><span><b>网段级 whois</b> —— <code>company_name</code> 取自 RIR 的 RDAP 对象，不是 ASN 的名字</span></li>
+        <li><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-6.5 6.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06L6.75 10.19l5.97-5.97a.75.75 0 0 1 1.06 0Z"/></svg><span><b>IP → ASN</b> —— 每小时更新的 RouteViews 视角，含 AS 代号与注册机构名</span></li>
+        <li><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-6.5 6.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06L6.75 10.19l5.97-5.97a.75.75 0 0 1 1.06 0Z"/></svg><span><b>国家级地理位置</b> —— 免费库，城市级仅供参考，用 <code>accuracy</code> 判断可信度</span></li>
+        <li><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-6.5 6.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06L6.75 10.19l5.97-5.97a.75.75 0 0 1 1.06 0Z"/></svg><span><b>来源标记</b> —— 每个值都标了是 whois 查到的还是回退兜底的</span></li>
+      </ul>
+    </div>
+
+    <div>
+      <form class="searchrow" id="form" autocomplete="off">
+        <label class="sr" for="q">IP 地址</label>
+        <div class="field">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.68 11.74a6 6 0 1 1 1.06-1.06l3.04 3.04a.75.75 0 1 1-1.06 1.06ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg>
+          <input id="q" name="q" placeholder="8.8.8.8 或 2606:4700::1111（逗号分隔可批量）" spellcheck="false">
+        </div>
+        <button class="primary" type="submit">查询</button>
+      </form>
+      <div class="chips">
+        <button class="chip" type="button" data-ip="">我的 IP</button>
+        <button class="chip" type="button" id="rand">随机 IP</button>
+        <button class="chip" type="button" data-ip="8.8.8.8">8.8.8.8</button>
+        <button class="chip" type="button" data-ip="1.1.1.1">1.1.1.1</button>
+        <button class="chip" type="button" data-ip="32.5.140.2">32.5.140.2</button>
+        <button class="chip" type="button" data-ip="2606:4700:4700::1111">2606:4700:4700::1111</button>
+        <button class="chip" type="button" data-ip="8.8.8.8, 1.1.1.1, 9.9.9.9">批量示例</button>
+      </div>
+
+      <div class="result">
+        <div class="result-head">
+          <span class="dot" id="dot"></span>
+          <span id="status">正在查询你的 IP…</span>
+          <span class="spacer"></span>
+          <button class="copy" type="button" id="copy">复制</button>
+        </div>
+        <pre class="json loading" id="out">{ }</pre>
+        <div class="explain" id="explain"></div>
+        <div class="hint">点击任意字段名查看含义。<b>curl 请求同一个地址返回 JSON</b>，浏览器才会拿到这个页面。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cards" id="cards">
+    <div class="card">
+      <h3>位置</h3>
+      <div class="big" id="c-country"><span class="flag">🌐</span><span>—</span></div>
+      <dl class="kv">
+        <dt>城市</dt><dd id="c-city">—</dd>
+        <dt>时区</dt><dd id="c-tz">—</dd>
+        <dt>坐标</dt><dd class="mono" id="c-ll">—</dd>
+        <dt>精度</dt><dd id="c-acc">—</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>网络</h3>
+      <div class="big" id="c-asn">—</div>
+      <dl class="kv">
+        <dt>AS 代号</dt><dd class="mono" id="c-asname">—</dd>
+        <dt>注册机构</dt><dd id="c-asorg">—</dd>
+        <dt>来源</dt><dd id="c-assrc">—</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h3>组织</h3>
+      <div class="big" id="c-company">—</div>
+      <dl class="kv">
+        <dt>网段</dt><dd class="mono" id="c-net">—</dd>
+        <dt>来源</dt><dd id="c-cosrc">—</dd>
+        <dt>耗时</dt><dd class="mono" id="c-ms">—</dd>
+      </dl>
+    </div>
+  </div>
+
+  <section class="block" id="bulk-section" hidden>
+    <h2>批量结果</h2>
+    <p class="sub">一次最多 100 个地址，服务端按顺序返回同长度的数组。</p>
+    <div class="tablewrap">
+      <table id="bulk-table">
+        <thead><tr><th>IP</th><th>国家</th><th>ASN</th><th>组织</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="block" id="fields">
+    <h2>字段说明</h2>
+    <p class="sub">响应里带 <code>*_source</code> 标记，说明这个值是 whois 查到的，还是没查到时的兜底值 —— 这在拿它做判断时很重要。</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:200px">字段</th><th>含义</th></tr></thead>
+        <tbody id="fieldrows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="block" id="docs">
+    <h2>接口</h2>
+    <p class="sub">同一个路径按 <code>Accept</code> 协商：浏览器拿到页面，其他客户端拿到 JSON。想强制要 JSON 就加 <code>?format=json</code>。</p>
+    <div class="docs">
+      <div class="snippet">
+        <div class="cap">单个查询（省略 <code>q</code> 就查调用方自己的 IP）</div>
+        <pre><span class="c"># 指定地址</span>
+curl <span class="s">'$ORIGIN/?q=32.5.140.2'</span>
+
+<span class="c"># 查自己</span>
+curl <span class="s">'$ORIGIN/'</span></pre>
+      </div>
+      <div class="snippet">
+        <div class="cap">批量查询，最多 100 个，返回等长数组</div>
+        <pre>curl -X POST -H <span class="s">'Content-Type: application/json'</span> \
+     -d <span class="s">'{"ips":["8.8.8.8","1.1.1.1"]}'</span> \
+     <span class="s">'$ORIGIN/'</span></pre>
+      </div>
+      <div class="snippet">
+        <div class="cap">健康检查（含缓存条目数）</div>
+        <pre>curl <span class="s">'$ORIGIN/healthz'</span>
+<span class="c"># {"ok":true,"company_netblocks":128,"asn_orgs":64}</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="sources">
+    <h2>数据来源</h2>
+    <p class="sub">全部是公开数据，可自行下载重建，不依赖任何商业授权。</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:200px">数据</th><th style="width:38%">来源</th><th>更新</th></tr></thead>
+        <tbody>
+          <tr><td class="d">地理位置</td><td class="d"><a href="https://github.com/ipapi-is/ipapi" rel="noreferrer noopener" target="_blank">ipapi-is/ipapi</a> 免费 geolocation 库</td><td class="d">仓库不定期</td></tr>
+          <tr><td class="d">IP → ASN</td><td class="d"><a href="https://iptoasn.com" rel="noreferrer noopener" target="_blank">iptoasn.com</a>（源自 RouteViews）</td><td class="d">每小时</td></tr>
+          <tr><td class="d"><code>company_name</code></td><td class="d">各 RIR 的 RDAP <code>ip/</code> 对象</td><td class="d">按需查询 + 本地缓存</td></tr>
+          <tr><td class="d"><code>asn_org</code></td><td class="d">各 RIR 的 RDAP <code>autnum/</code> 对象</td><td class="d">按需查询 + 本地缓存</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:16px 0 0">
+      未实现 <code>is_datacenter</code> / <code>is_vpn</code> / <code>is_proxy</code> / <code>is_abuser</code> / <code>is_tor</code> ——
+      这些依赖 ipapi.is 的商业库，没有可靠的免费替代。默认它们不出现在响应里，避免"查不到"被误读成"确定不是"。
+    </p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap row">
+    <span>自托管部署，查询不出网（RDAP 首次回源除外）。</span>
+    <span class="spacer"></span>
+    <span id="health" class="mono">—</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var out = $("#out"), status = $("#status"), dot = $("#dot"), input = $("#q"),
+      explain = $("#explain"), bulkSec = $("#bulk-section"), bulkBody = $("#bulk-table tbody");
+  var last = null;
+
+  var FIELDS = [
+    ["ip", "查询的地址。IPv4-mapped IPv6（<code>::ffff:1.2.3.4</code>）会被还原成 IPv4。"],
+    ["is_bogon", "是否为不可能作为公网源地址出现的保留段：RFC 1918 私网、回环、链路本地、CGNAT、文档段、组播等。命中后不再做后续查询。"],
+    ["company_name", "该 IP 所在<b>网段</b>在 RIR whois 里登记的组织。它常常不等于 ASN 的名字 —— <code>1.1.1.1</code> 的 company 是 APNIC，asn_org 才是 Cloudflare。"],
+    ["company_source", "<code>whois_rdap</code> = 网段级 whois 查到的，与 ipapi.is 一致；<code>asn_org</code> = RDAP 没命中，退回用 ASN 名兜底。"],
+    ["company_network", "whois 返回的网段范围。缓存按这个范围整段生效，所以同网段的后续查询不再回源。"],
+    ["asn_num", "RouteViews 视角下宣告该前缀的 AS 号。不同数据源的归属可能不同。"],
+    ["asn_name", "AS 的代号 / handle，例如 <code>ATT-INTERNET4</code>，来自 BGP 表或 RDAP 的 netname。"],
+    ["asn_org", "注册这个 AS 的法人机构名，例如 <code>AT&amp;T Enterprises, LLC</code>，来自 RDAP 的 <code>autnum</code> 对象。"],
+    ["asn_org_source", "<code>whois_rdap</code> = RDAP 查到的注册机构名；<code>routeviews</code> = 没查到，退回 BGP 表里的 AS 代号。"],
+    ["cc", "两位国家代码（ISO 3166-1 alpha-2）。geo 库没命中时会退回 ASN 的注册国。"],
+    ["country", "国家名称。"],
+    ["state", "一级行政区。免费库在这一级已经不太可靠。"],
+    ["city", "城市。<b>不要用于精确定位</b>，先看 <code>accuracy</code>。"],
+    ["zip", "邮编，同样只供参考。"],
+    ["timezone", "IANA 时区名，例如 <code>Asia/Shanghai</code>。这个字段比城市可靠得多。"],
+    ["lat", "纬度。指向的是网段的估计中心，不是设备位置。"],
+    ["lon", "经度。"],
+    ["accuracy", "地理位置的置信度，<b>1 最准、5 最粗</b>。4~5 基本只能当国家级信息用。"],
+    ["elapsed_ms", "服务端处理耗时（毫秒）。命中缓存通常在 1ms 以内；首次 RDAP 回源会到几百毫秒。"],
+    ["error", "只在出错时出现，例如地址解析失败。"],
+    ["is_datacenter", "仅在 <code>-compat</code> 模式下出现，恒为 <code>false</code> —— 本项目<b>没有实现</b>该判断，不要当成结论使用。"]
+  ];
+
+  var FMAP = {};
+  var rows = FIELDS.map(function (f) {
+    FMAP[f[0]] = f[1];
+    return '<tr id="f-' + f[0] + '"><td class="f">' + f[0] + '</td><td class="d">' + f[1] + "</td></tr>";
+  }).join("");
+  $("#fieldrows").innerHTML = rows;
+
+  /* ---------- rendering ---------- */
+  function esc(s) {
+    return String(s).replace(/[&<>]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c];
+    });
+  }
+
+  var TOKEN = /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"\s*:?)|\b(true|false)\b|\bnull\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+
+  function highlight(value) {
+    return esc(JSON.stringify(value, null, 2)).replace(TOKEN, function (m) {
+      if (m.charAt(0) === '"') {
+        if (m.charAt(m.length - 1) === ":") {
+          var name = m.slice(1, m.lastIndexOf('"'));
+          return '<span class="key" data-field="' + esc(name) + '" role="button" tabindex="0">' + m + "</span>";
+        }
+        return '<span class="str">' + m + "</span>";
+      }
+      if (m === "true" || m === "false") return '<span class="bool">' + m + "</span>";
+      if (m === "null") return '<span class="null">' + m + "</span>";
+      return '<span class="num">' + m + "</span>";
+    });
+  }
+
+  function flagOf(cc) {
+    if (!cc || cc.length !== 2 || !/^[a-zA-Z]{2}$/.test(cc)) return "🌐";
+    return String.fromCodePoint.apply(null, cc.toUpperCase().split("").map(function (ch) {
+      return 0x1f1e6 + ch.charCodeAt(0) - 65;
+    }));
+  }
+
+  function srcBadge(v) {
+    if (!v) return '<span class="badge">—</span>';
+    if (v === "whois_rdap") return '<span class="badge good">whois_rdap</span>';
+    return '<span class="badge soft">' + esc(v) + "</span>";
+  }
+
+  function accBar(n) {
+    if (!n) return "—";
+    var bars = "";
+    for (var i = 1; i <= 5; i++) bars += '<i class="' + (i <= 6 - n ? "on" : "") + '"></i>';
+    return '<span class="acc" title="1 最准，5 最粗">' + bars + ' <span style="color:var(--fg-faint);font-size:12px">' + n + "/5</span></span>";
+  }
+
+  function text(id, v) { document.getElementById(id).textContent = v || "—"; }
+  function html(id, v) { document.getElementById(id).innerHTML = v; }
+
+  function renderCards(r) {
+    var loc = [r.city, r.state].filter(Boolean).join(", ");
+    html("c-country", '<span class="flag">' + flagOf(r.cc) + "</span><span>" +
+      esc(r.country || r.cc || "未知") + "</span>");
+    text("c-city", loc + (r.zip ? "  " + r.zip : ""));
+    text("c-tz", r.timezone);
+    if (r.lat || r.lon) {
+      html("c-ll", '<a href="https://www.openstreetmap.org/?mlat=' + r.lat + "&mlon=" + r.lon +
+        '#map=6/' + r.lat + "/" + r.lon + '" target="_blank" rel="noreferrer noopener">' +
+        r.lat.toFixed(4) + ", " + r.lon.toFixed(4) + "</a>");
+    } else { text("c-ll", ""); }
+    html("c-acc", accBar(r.accuracy));
+
+    text("c-asn", r.asn_num ? "AS" + r.asn_num : "—");
+    text("c-asname", r.asn_name);
+    text("c-asorg", r.asn_org);
+    html("c-assrc", srcBadge(r.asn_org_source));
+
+    text("c-company", r.company_name);
+    text("c-net", r.company_network);
+    html("c-cosrc", srcBadge(r.company_source));
+    text("c-ms", r.elapsed_ms != null ? r.elapsed_ms + " ms" : "");
+  }
+
+  function renderBulk(list) {
+    bulkBody.innerHTML = list.map(function (r) {
+      if (r.error) {
+        return "<tr><td class=\"ip\">" + esc(r.ip) + '</td><td class="err" colspan="3">' + esc(r.error) + "</td></tr>";
+      }
+      return "<tr><td class=\"ip\">" + esc(r.ip) + "</td><td class=\"d\">" +
+        flagOf(r.cc) + " " + esc(r.country || r.cc || "—") + '</td><td class="ip">' +
+        (r.asn_num ? "AS" + r.asn_num : "—") + '</td><td class="d">' + esc(r.company_name || "—") + "</td></tr>";
+    }).join("");
+    bulkSec.hidden = false;
+  }
+
+  /* ---------- lookup ---------- */
+  function setStatus(msg, bad) {
+    status.textContent = msg;
+    dot.className = "dot" + (bad ? " err" : "");
+  }
+
+  function show(data) {
+    last = data;
+    out.classList.remove("loading");
+    out.innerHTML = highlight(data);
+  }
+
+  function parseList(q) {
+    return q.split(/[\s,;]+/).filter(Boolean);
+  }
+
+  function lookup(q) {
+    var ips = parseList(q || "");
+    out.classList.add("loading");
+    out.textContent = "查询中…";
+    explain.classList.remove("on");
+    setStatus(ips.length > 1 ? "查询 " + ips.length + " 个地址…" : "查询中…");
+
+    var req;
+    if (ips.length > 1) {
+      req = fetch("/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ ips: ips.slice(0, 100) })
+      });
+    } else {
+      req = fetch("/?format=json" + (ips.length ? "&q=" + encodeURIComponent(ips[0]) : ""),
+        { headers: { Accept: "application/json" } });
+    }
+
+    return req.then(function (res) {
+      return res.json().then(function (data) { return { ok: res.ok, data: data }; });
+    }).then(function (r) {
+      show(r.data);
+      if (Array.isArray(r.data)) {
+        bulkSec.hidden = false;
+        renderBulk(r.data);
+        var first = r.data.filter(function (x) { return !x.error; })[0];
+        if (first) renderCards(first);
+        setStatus(r.data.length + " 个结果");
+        return;
+      }
+      bulkSec.hidden = true;
+      renderCards(r.data);
+      if (r.data.error) { setStatus(r.data.error, true); return; }
+      if (r.data.is_bogon) { setStatus(r.data.ip + " · 保留地址（bogon）", true); return; }
+      setStatus(r.data.ip + " · " + (r.data.elapsed_ms != null ? r.data.elapsed_ms + " ms" : "ok"));
+    }).catch(function (e) {
+      out.classList.add("loading");
+      out.textContent = String(e && e.message ? e.message : e);
+      setStatus("请求失败", true);
+    });
+  }
+
+  /* ---------- events ---------- */
+  $("#form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var q = input.value.trim();
+    var url = q ? "?q=" + encodeURIComponent(q) : "/";
+    history.replaceState(null, "", url);
+    lookup(q);
+  });
+
+  document.querySelectorAll("[data-ip]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      input.value = b.dataset.ip;
+      $("#form").dispatchEvent(new Event("submit"));
+    });
+  });
+
+  // A random address that is unlikely to land in reserved space; the server
+  // still decides, and a bogon simply comes back flagged as one.
+  $("#rand").addEventListener("click", function () {
+    var a;
+    do { a = 1 + Math.floor(Math.random() * 222); }
+    while (a === 10 || a === 127 || a === 100 || a === 169 || a === 172 || a === 192 || a === 198);
+    var ip = [a, Math.floor(Math.random() * 256), Math.floor(Math.random() * 256),
+              1 + Math.floor(Math.random() * 254)].join(".");
+    input.value = ip;
+    $("#form").dispatchEvent(new Event("submit"));
+  });
+
+  out.addEventListener("click", function (e) {
+    var el = e.target.closest(".key");
+    if (!el) return;
+    var name = el.dataset.field;
+    out.querySelectorAll(".key.on").forEach(function (k) { k.classList.remove("on"); });
+    el.classList.add("on");
+    explain.innerHTML = '<span class="name">' + esc(name) + "</span>" +
+      "<p>" + (FMAP[name] || "这个字段没有单独的说明。") + "</p>";
+    explain.classList.add("on");
+    document.querySelectorAll("tr.hl").forEach(function (t) { t.classList.remove("hl"); });
+    var row = document.getElementById("f-" + name);
+    if (row) row.classList.add("hl");
+  });
+
+  $("#copy").addEventListener("click", function () {
+    var btn = $("#copy");
+    var txt = last == null ? out.textContent : JSON.stringify(last, null, 2);
+    var done = function () { btn.textContent = "已复制"; setTimeout(function () { btn.textContent = "复制"; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, function () { btn.textContent = "复制失败"; });
+    } else {
+      var ta = document.createElement("textarea");
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); done(); } catch (err) { btn.textContent = "复制失败"; }
+      document.body.removeChild(ta);
+    }
+  });
+
+  /* ---------- boot ---------- */
+  document.querySelectorAll(".snippet pre").forEach(function (p) {
+    p.innerHTML = p.innerHTML.replace(/\$ORIGIN/g, location.origin);
+  });
+
+  fetch("/healthz", { headers: { Accept: "application/json" } })
+    .then(function (r) { return r.json(); })
+    .then(function (h) {
+      $("#health").textContent = "缓存 " + h.company_netblocks + " 个网段 · " + h.asn_orgs + " 个 ASN";
+    })
+    .catch(function () { $("#health").textContent = ""; });
+
+  var initial = new URLSearchParams(location.search).get("q") || "";
+  input.value = initial;
+  lookup(initial);
+})();
+</script>
+</body>
+</html>

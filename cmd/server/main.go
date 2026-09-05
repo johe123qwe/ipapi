@@ -4,6 +4,9 @@
 //	GET  /?q=8.8.8.8      single lookup (omit q to look up the caller)
 //	POST /                {"ips": ["8.8.8.8", ...]} -> array of results
 //	GET  /healthz         readiness probe
+//
+// A GET whose Accept header prefers text/html is answered with the browser UI
+// instead; ?format=json opts back out of that.
 package main
 
 import (
@@ -91,6 +94,7 @@ type server struct {
 	mmdbDir string
 	company *company.Resolver
 	compat  bool
+	ui      bool
 	timeout time.Duration
 	log     *slog.Logger
 }
@@ -102,13 +106,14 @@ func main() {
 		cacheDir = flag.String("cache", "data/cache", "directory for the company (RDAP) cache")
 		useRDAP  = flag.Bool("company", true, "resolve company_name and asn_org from whois via RDAP")
 		compat   = flag.Bool("compat", false, "emit is_datacenter/is_tor/is_proxy/is_vpn/is_abuser as false for drop-in compatibility")
+		ui       = flag.Bool("ui", true, "serve the browser UI on GET / when the client accepts text/html")
 		timeout  = flag.Duration("timeout", 5*time.Second, "per-request budget for a company lookup")
 	)
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	s := &server{mmdbDir: *mmdbDir, compat: *compat, timeout: *timeout, log: log}
+	s := &server{mmdbDir: *mmdbDir, compat: *compat, ui: *ui, timeout: *timeout, log: log}
 	if err := s.reload(); err != nil {
 		log.Error("cannot open databases (run `make data` first)", "err", err)
 		os.Exit(1)
@@ -144,6 +149,11 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok": true, "company_netblocks": nets, "asn_orgs": asns})
 	})
+	// Browsers probe this even when the page declares an inline icon; without a
+	// route it would be parsed as an IP and answered with a 400.
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("/", s.handle)
 
 	srv := &http.Server{
@@ -153,7 +163,7 @@ func main() {
 	}
 
 	go func() {
-		log.Info("listening", "addr", *addr, "company_lookup", *useRDAP, "compat", *compat)
+		log.Info("listening", "addr", *addr, "company_lookup", *useRDAP, "compat", *compat, "ui", *ui)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server stopped", "err", err)
 			os.Exit(1)
@@ -186,6 +196,10 @@ func (s *server) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGet(w http.ResponseWriter, r *http.Request) {
+	if s.ui && r.URL.Path == "/" && wantsHTML(r) {
+		s.serveIndex(w, r)
+		return
+	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
 		q = clientIP(r)
